@@ -9,8 +9,8 @@ max_history_line = 30  #prompt会依赖30行命令行历史信息
 show_confidence = False
 cache_suggestions = False
 ```
-2. 初始化命令行记录文件，用于prompt中，执行init_terminal_session.py 
-3. 在.bashrc文件中设置快捷键alt+enter，
+
+2. 在.bashrc文件中设置快捷键alt+enter，
 ```shell
 function suggest_cmd() {
   local input="$*"
@@ -27,3 +27,5 @@ function suggest_cmd() {
 bind -x '"\e\r": "suggest_cmd \"$READLINE_LINE\""'
 
 ```
+
+3. 每开一个终端都需要初始化命令行记录文件，用于prompt中，开终端后执行init_terminal_session.py 
