@@ -1,0 +1,382 @@
+#!/usr/bin/env python3
+"""
+ai-cli-suggest - A tool that suggests commands based on command history and current prompt
+using OpenAI API models.
+"""
+
+import os
+import sys
+import argparse
+import json
+import re
+import readline
+import subprocess
+from typing import List, Dict, Optional
+import requests
+from pathlib import Path
+import configparser
+
+from openai import OpenAI
+
+# Configuration
+PROJECT_DIR = Path(__file__).resolve().parent  # Get the directory of the script
+CONFIG_DIR = PROJECT_DIR / "config"
+CONFIG_FILE = CONFIG_DIR / "config.ini"
+HISTORY_FILE = Path.home() / ".bash_history"
+CACHE_FILE = CONFIG_DIR / "suggestion_cache.json"
+SESSION_LOG_FILE = PROJECT_DIR / 'terminal_session.log'
+
+def setup_config():
+    """Create config directory and default config file if it doesn't exist."""
+    if not CONFIG_DIR.exists():
+        CONFIG_DIR.mkdir(parents=True)
+    
+    if not CONFIG_FILE.exists():
+        config = configparser.ConfigParser()
+        config['DEFAULT'] = {
+            'api_key': '',
+            'model': 'gpt-4',
+            'max_history': '5',
+            'show_confidence': 'True',
+            'cache_suggestions': 'True'
+        }
+        
+        with open(CONFIG_FILE, 'w') as f:
+            config.write(f)
+        
+        print(f"Created default config at {CONFIG_FILE}. Please add your API key.")
+        sys.exit(1)
+
+def load_config():
+    """Load configuration from config file."""
+    config = configparser.ConfigParser()
+    config.read(CONFIG_FILE)
+    
+    return {
+        'api_key': config['DEFAULT']['api_key'],
+        'model': config['DEFAULT']['model'],
+        'base_url': config['DEFAULT']['base_url'],
+        'max_history': int(config['DEFAULT']['max_history']),
+        'show_confidence': config['DEFAULT'].getboolean('show_confidence'),
+        'cache_suggestions': config['DEFAULT'].getboolean('cache_suggestions')
+    }
+
+def get_command_history(max_entries: int) -> List[str]:
+    """Get recent command history from bash history file."""
+    if not HISTORY_FILE.exists():
+        return []
+    
+    with open(HISTORY_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+        # Read the last max_entries commands, skipping empty lines
+        history = [line.strip() for line in f.readlines() if line.strip()]
+        return history[-max_entries:]
+
+def get_session_history(max_entries: int = 30) -> List[str]:
+    """Get the last max_entries lines from the session log file."""
+    if not SESSION_LOG_FILE.exists():
+        return []
+    
+    with open(SESSION_LOG_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+        # Use a deque to efficiently store the last max_entries lines
+        from collections import deque
+        history = deque(maxlen=max_entries)
+        
+        for line in f:
+            stripped_line = line.strip()
+            if stripped_line:
+                history.append(stripped_line)
+        
+        return list(history)
+
+def get_current_directory() -> str:
+    """Get the current working directory."""
+    return os.getcwd()
+
+def get_directory_content() -> List[str]:
+    """Get list of files and directories in current directory."""
+    return os.listdir('.')
+
+def get_current_user() -> str:
+    """Get current username."""
+    return os.environ.get('USER', 'unknown')
+
+def get_system_info() -> Dict[str, str]:
+    """Get basic system information."""
+    system_info = {}
+    
+    try:
+        # Get OS information
+        with open('/etc/os-release', 'r') as f:
+            for line in f:
+                if line.startswith('PRETTY_NAME='):
+                    system_info['os'] = line.split('=')[1].strip().strip('"')
+                    break
+    except:
+        system_info['os'] = 'Unknown Linux'
+    
+    # Get kernel version
+    try:
+        kernel = subprocess.check_output(['uname', '-r'], universal_newlines=True).strip()
+        system_info['kernel'] = kernel
+    except:
+        system_info['kernel'] = 'Unknown'
+    
+    return system_info
+
+def create_prompt(history: List[str], current_input: str, config: Dict) -> str:
+    """Create a prompt for the AI model."""
+    system_info = get_system_info()
+    dir_content = get_directory_content()
+    current_dir = get_current_directory()
+    username = get_current_user()
+    
+    # Format history as input/output pairs if possible
+    #formatted_history = []
+    #for cmd in history:
+    #    formatted_history.append(f"$ {cmd}")
+    formatted_history = history
+    history_text = "\n".join(formatted_history)
+    
+    prompt = f"""You are an AI assistant helping a Linux user predict command line operations.
+System: {system_info.get('os', 'Linux')} with kernel {system_info.get('kernel', 'Unknown')}
+Username: {username}
+Current directory: {current_dir}
+Directory contents: {', '.join(dir_content[:20])}{"..." if len(dir_content) > 20 else ""}
+
+Recent command history:
+{history_text}
+
+The user is currently typing: {current_input}
+
+Based on this context, predict the full command the user most likely wants to execute.
+Respond with ONLY the suggested command, nothing else. Make sure the command is valid and 
+would work in this environment.
+"""
+    print("---------prompt---------\n",prompt,"-----------------------\n")
+    return prompt
+
+def query_openai_api(prompt: str, config: Dict) -> Dict:
+    """Query OpenAI API for a command suggestion."""
+    api_key = config['api_key']
+    model = config['model']
+    
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+    
+    data = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": "You are a helpful command-line assistant that suggests commands based on history and current input."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.3,
+        "max_tokens": 100
+    }
+    
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=data
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"Error: API returned status code {response.status_code}")
+            print(response.text)
+            return {"error": response.text}
+            
+    except Exception as e:
+        return {"error": str(e)}
+
+def query_model_api(prompt: str, config: Dict) -> Dict:
+
+    #try:
+    ntokens = 0
+    
+    client = OpenAI(
+        api_key=config["api_key"],
+        base_url=config["base_url"]
+    )
+    messages=[
+        {"role": "system", "content": "You are a helpful command-line assistant that suggests commands based on history and current input."},
+        {"role": "user", "content": prompt},
+        {"role": "assistant", "content": ""}
+    ]
+    completion = client.chat.completions.create(
+        model=config["model"],
+        messages=messages,
+        temperature=0.3,
+    )
+    ntokens+=completion.usage.total_tokens
+    # 触发因为输出长度限制，循环生成 assistant 回复
+    while completion.choices[0].finish_reason == "length":
+        messages[-1]["content"] += completion.choices[0].message.content
+        completion = client.chat.completions.create(
+            model=config["model"],
+            messages=messages
+        )
+        ntokens+=completion.usage.total_tokens
+
+
+    print(f"token消耗：{ntokens}")
+
+
+    # 不管是否触发 finish_reason == "length"，都返回最后一条回复
+    messages[-1]["content"] += completion.choices[0].message.content
+    return messages[-1]["content"]
+            
+    #except Exception as e:
+    #    return {"error": str(e)}
+
+def check_cache(current_input: str) -> Optional[str]:
+    """Check if we have a cached suggestion for this input."""
+    if not CACHE_FILE.exists():
+        return None
+    
+    try:
+        with open(CACHE_FILE, 'r') as f:
+            cache = json.load(f)
+            
+        # Look for exact prefix matches
+        for cached_input, suggestion in cache.items():
+            if current_input.startswith(cached_input) and len(current_input) > len(cached_input) // 2:
+                return suggestion
+                
+        return None
+    except:
+        return None
+
+def update_cache(current_input: str, suggestion: str):
+    """Update the suggestion cache."""
+    cache = {}
+    
+    if CACHE_FILE.exists():
+        try:
+            with open(CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+        except:
+            pass
+    
+    # Add new suggestion to cache
+    cache[current_input] = suggestion
+    
+    # Limit cache size to 1000 entries
+    if len(cache) > 1000:
+        # Remove oldest entries
+        cache = dict(list(cache.items())[-1000:])
+    
+    with open(CACHE_FILE, 'w') as f:
+        json.dump(cache, f)
+
+def get_suggestion(current_input: str, config: Dict) -> str:
+    """Get a command suggestion based on history and current input."""
+    if not current_input.strip():
+        return ""
+    
+    # Check cache first if enabled
+    if config['cache_suggestions']:
+        cached = check_cache(current_input)
+        if cached:
+            return cached
+    
+    # Get command history
+    #history = get_command_history(config['max_history'])
+    history = get_session_history()
+    
+    # Create prompt for API
+    prompt = create_prompt(history, current_input, config)
+    
+    # Query API
+    response = query_model_api(prompt, config)
+    
+    if "error" in response:
+        return f"Error: {response['error']}"
+    
+    try:
+        suggestion = response.strip()
+        
+        # Clean up suggestion (remove code fences if any)
+        suggestion = re.sub(r'^```.*\n', '', suggestion)
+        suggestion = re.sub(r'\n```$', '', suggestion)
+        
+        # Update cache if enabled
+        if config['cache_suggestions']:
+            update_cache(current_input, suggestion)
+        
+        return suggestion
+    except (KeyError, IndexError):
+        return "Error: Could not parse API response"
+
+def format_suggestion(suggestion: str, confidence: Optional[float] = None, show_confidence: bool = True) -> str:
+    """Format the suggestion for display."""
+    if show_confidence and confidence is not None:
+        confidence_str = f" [{confidence:.2f}]"
+    else:
+        confidence_str = ""
+    
+    return f"\033[1;32m> {suggestion}{confidence_str}\033[0m"
+
+def main():
+    parser = argparse.ArgumentParser(description="AI-powered command-line suggestion tool")
+    parser.add_argument("input", nargs="?", help="Current command line input")
+    parser.add_argument("--setup", action="store_true", help="Setup configuration")
+    parser.add_argument("--api-key", help="Set OpenAI API key")
+    parser.add_argument("--model", help="Set OpenAI model")
+    
+    args = parser.parse_args()
+    
+    # Ensure config directory exists
+    setup_config()
+    
+    # Handle setup commands
+    if args.setup:
+        print(f"Configuration file is at: {CONFIG_FILE}")
+        print("Edit this file to configure the tool.")
+        sys.exit(0)
+    
+    if args.api_key:
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        config['DEFAULT']['api_key'] = args.api_key
+        with open(CONFIG_FILE, 'w') as f:
+            config.write(f)
+        print(f"API key updated.")
+        sys.exit(0)
+    
+    if args.model:
+        config = configparser.ConfigParser()
+        config.read(CONFIG_FILE)
+        config['DEFAULT']['model'] = args.model
+        with open(CONFIG_FILE, 'w') as f:
+            config.write(f)
+        print(f"Model updated to: {args.model}")
+        sys.exit(0)
+    
+    # Load configuration
+    config = load_config()
+    
+    if not config['api_key']:
+        print("Error: API key not configured. Please run with --setup or --api-key")
+        sys.exit(1)
+    
+    # Get current input from args or stdin
+    current_input = args.input or ""
+    if not current_input and not sys.stdin.isatty():
+        current_input = sys.stdin.read().strip()
+    
+    # Get and display suggestion
+    if current_input:
+        suggestion = get_suggestion(current_input, config)
+        if suggestion:
+            print(suggestion)
+            #print(format_suggestion(suggestion, show_confidence=config['show_confidence']))
+    else:
+        print("Error: No input provided")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
