@@ -1,6 +1,7 @@
 # ai_cli
-1. 初始化命令行记录文件，用于prompt中，执行init_terminal_session.py 
-2. 设置快捷键alt+enter，
+1. 初始化config，```python ai-cli-suggest --setup```，填写自己拥有的大模型参数
+2. 初始化命令行记录文件，用于prompt中，执行init_terminal_session.py 
+3. 在.bashrc文件中设置快捷键alt+enter，
 ```shell
 function suggest_cmd() {
   local input="$*"
