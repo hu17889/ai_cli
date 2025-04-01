@@ -1,7 +1,7 @@
 # ai_cli
 1. 初始化命令行记录文件，用于prompt中，执行init_terminal_session.py 
 2. 设置快捷键alt+enter，
-···shell
+```shell
 function suggest_cmd() {
   local input="$*"
   local suggestion
@@ -16,4 +16,4 @@ function suggest_cmd() {
 # 使用单引号确保 $READLINE_LINE 正确传递
 bind -x '"\e\r": "suggest_cmd \"$READLINE_LINE\""'
 
-···
+```
