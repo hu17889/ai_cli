@@ -15,6 +15,7 @@ from typing import List, Dict, Optional
 import requests
 from pathlib import Path
 import configparser
+import httpx
 
 from openai import OpenAI
 
@@ -153,7 +154,7 @@ Based on this context, predict the full command the user most likely wants to ex
 Respond with ONLY the suggested command, nothing else. Make sure the command is valid and 
 would work in this environment.
 """
-    print("---------prompt---------\n",prompt,"-----------------------\n")
+    #print("---------prompt---------\n",prompt,"-----------------------\n")
     return prompt
 
 def query_openai_api(prompt: str, config: Dict) -> Dict:
@@ -197,10 +198,14 @@ def query_model_api(prompt: str, config: Dict) -> Dict:
 
     #try:
     ntokens = 0
+
+    transport = httpx.HTTPTransport(trust_env=False)  # 不信任环境代理
+    http_client = httpx.Client(transport=transport)
     
     client = OpenAI(
         api_key=config["api_key"],
-        base_url=config["base_url"]
+        base_url=config["base_url"],
+        http_client=http_client
     )
     messages=[
         {"role": "system", "content": "You are a helpful command-line assistant that suggests commands based on history and current input."},
