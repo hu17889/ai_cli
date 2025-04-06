@@ -73,12 +73,13 @@ def get_command_history(max_entries: int) -> List[str]:
         history = [line.strip() for line in f.readlines() if line.strip()]
         return history[-max_entries:]
 
-def get_session_history(max_entries: int = 30) -> List[str]:
+def get_session_history(session_path: Path, max_entries: int = 30) -> List[str]:
     """Get the last max_entries lines from the session log file."""
-    if not SESSION_LOG_FILE.exists():
+    if not session_path.exists():
         return []
     
-    with open(SESSION_LOG_FILE, 'r', encoding='utf-8', errors='ignore') as f:
+
+    with open(session_path, 'r', encoding='utf-8', errors='ignore') as f:
         # Use a deque to efficiently store the last max_entries lines
         from collections import deque
         history = deque(maxlen=max_entries)
@@ -154,7 +155,7 @@ Based on this context, predict the full command the user most likely wants to ex
 Respond with ONLY the suggested command, nothing else. Make sure the command is valid and 
 would work in this environment.
 """
-    #print("---------prompt---------\n",prompt,"-----------------------\n")
+    print("---------prompt---------\n",prompt,"-----------------------\n")
     return prompt
 
 def query_openai_api(prompt: str, config: Dict) -> Dict:
@@ -278,7 +279,7 @@ def update_cache(current_input: str, suggestion: str):
     with open(CACHE_FILE, 'w') as f:
         json.dump(cache, f)
 
-def get_suggestion(current_input: str, config: Dict) -> str:
+def get_suggestion(current_input: str, session_path:str, config: Dict) -> str:
     """Get a command suggestion based on history and current input."""
     if not current_input.strip():
         return ""
@@ -291,7 +292,7 @@ def get_suggestion(current_input: str, config: Dict) -> str:
     
     # Get command history
     #history = get_command_history(config['max_history'])
-    history = get_session_history()
+    history = get_session_history(Path(session_path))
     
     # Create prompt for API
     prompt = create_prompt(history, current_input, config)
@@ -329,11 +330,14 @@ def format_suggestion(suggestion: str, confidence: Optional[float] = None, show_
 def main():
     parser = argparse.ArgumentParser(description="AI-powered command-line suggestion tool")
     parser.add_argument("input", nargs="?", help="Current command line input")
+    parser.add_argument("session_path", nargs="?", default=SESSION_LOG_FILE, help="")
     parser.add_argument("--setup", action="store_true", help="Setup configuration")
     parser.add_argument("--api-key", help="Set OpenAI API key")
     parser.add_argument("--model", help="Set OpenAI model")
+
     
     args = parser.parse_args()
+    print(args.session_path)
     
     # Ensure config directory exists
     setup_config()
@@ -362,6 +366,8 @@ def main():
         print(f"Model updated to: {args.model}")
         sys.exit(0)
     
+
+
     # Load configuration
     config = load_config()
     
@@ -376,7 +382,7 @@ def main():
     
     # Get and display suggestion
     if current_input:
-        suggestion = get_suggestion(current_input, config)
+        suggestion = get_suggestion(current_input, args.session_path, config)
         if suggestion:
             print(suggestion)
             #print(format_suggestion(suggestion, show_confidence=config['show_confidence']))
