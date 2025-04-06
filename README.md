@@ -1,5 +1,5 @@
 # ai_cli
-1. 初始化config，```python ai-cli-suggest --setup```，填写自己拥有的大模型参数
+1. 初始化config，```python ai-cli-suggest --setup```，生成config文件，并在文件里面填写自己拥有的大模型参数
 ```
 [DEFAULT]
 api_key = 
